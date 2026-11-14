@@ -21,7 +21,12 @@ const VENDOR_JS = `export const vendor = true;`;
  * plain HTTP). Deliberately contains no real-looking secrets.
  */
 export const vulnerableSite: Record<string, FixtureRoute> = {
-  "/": { body: HOME_HTML },
+  "/": {
+    // No CSP, X-Frame-Options, nosniff, or Referrer-Policy headers, and a
+    // session cookie with no flags — exercises the Phase 2B header checks.
+    headers: { "set-cookie": "session=fixturevalue; Path=/" },
+    body: HOME_HTML,
+  },
   "/static/app.js": { headers: { "content-type": "text/javascript" }, body: APP_JS },
   "/static/vendor.js": { headers: { "content-type": "text/javascript" }, body: VENDOR_JS },
   "/robots.txt": {

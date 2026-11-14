@@ -81,3 +81,15 @@
 | Script responses skipped when `finalUrl` origin differs from the page origin or content-type is image/video/audio/font | safeFetch follows redirects; off-origin or binary responses are not useful scan input |
 | 25 MB total byte budget across HTML + script bodies, checked before each script fetch | SPEC 4.3 budget; shared counter may overshoot by one in-flight batch — accepted as a guard, not a hard cap |
 | `retries: 2` on `scan.run` | Explicit cap instead of the SDK default; transient errors get two retries before `onFailure` marks the scan failed |
+
+## 2026-11-14 — Phase 2B header, transport, and cookie checks
+
+| Decision | Reason |
+|---|---|
+| `Check.timeoutMs` optional override; runner uses `check.timeoutMs ?? perCheckTimeoutMs` | site.https.redirect needs 12s for its extra probe; keeps the 5s default for everything else |
+| CSP unsafe-inline is ignored when the same directive has a nonce/hash source or 'strict-dynamic'; 'unsafe-eval' always flags | Matches browser behavior — those tokens make browsers ignore unsafe-inline anyway |
+| `site.headers.misc` flags a present-but-wrong X-Content-Type-Options value, not just a missing header | "nosniff" is the only useful value; anything else is equivalent to missing |
+| `site.cookies` emits one finding per issue type listing at most 5 cookie NAMES; values never appear | SPEC 4.3 + prompt: cookie values are credentials-adjacent and must not be stored |
+| HttpOnly split into sensitive-name (medium/medium) vs other (low/medium) findings | Prompt's two confidence/severity tiers for the same attribute |
+| `site.https.redirect` fetch failures (blocked/timeout/refused/throw) produce no finding | Many hosts close port 80; a failed probe is not evidence of a problem |
+| Fixture sites are plain HTTP, so `site.https.redirect` fires on both fixtures; clean-fixture assertions exclude it explicitly | HTTPS redirect behavior is covered by unit tests with crafted SafeFetchResult objects |

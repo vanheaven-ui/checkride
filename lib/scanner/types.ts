@@ -50,5 +50,7 @@ export type Check = {
   id: string;
   category: Category;
   target: "site" | "repo";
+  /** Per-check timeout override; the runner default applies when absent. */
+  timeoutMs?: number;
   run(ctx: ScanContext): Promise<RawFinding[]>;
 };

@@ -80,6 +80,40 @@ describe("runChecks", () => {
     expect(results.find((r) => r.checkId === "good.check")?.finding.title).toBe("ok");
   });
 
+  it("uses a check's own timeoutMs over the runner default", async () => {
+    const slow: Check = {
+      id: "slow.override",
+      category: "security",
+      target: "site",
+      timeoutMs: 300,
+      run: () =>
+        new Promise((resolve) =>
+          setTimeout(() => resolve([finding("slow.override", "finished")]), 120),
+        ),
+    };
+    // Global default is far below 120ms, but the check's 300ms override wins.
+    const results = await runChecks([slow], ctx, { perCheckTimeoutMs: 50 });
+    expect(results[0]?.finding.title).toBe("finished");
+  });
+
+  it("still errors a check that exceeds its own timeoutMs", async () => {
+    const slow: Check = {
+      id: "slow.override",
+      category: "security",
+      target: "site",
+      timeoutMs: 40,
+      run: () =>
+        new Promise((resolve) =>
+          setTimeout(() => resolve([finding("slow.override", "too late")]), 200),
+        ),
+    };
+    const results = await runChecks([slow], ctx);
+    expect(results[0]?.finding).toMatchObject({
+      severity: "info",
+      evidence: "check_errored",
+    });
+  });
+
   it("times out a hanging check and still returns other results", async () => {
     const hang: Check = {
       id: "hang.check",
