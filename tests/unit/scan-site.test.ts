@@ -15,16 +15,40 @@ afterEach(async () => {
 
 const SITE_HTML = `<!doctype html><html><head><script src="/app.js"></script></head><body>hi</body></html>`;
 
+const CLEAN_HEADERS = {
+  "strict-transport-security": "max-age=31536000; includeSubDomains",
+  "content-security-policy": "default-src 'self'; script-src 'self'",
+  "x-frame-options": "DENY",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "strict-origin-when-cross-origin",
+};
+
 /** Stub fetcher whose home page reports an HTTPS finalUrl. */
-function httpsSiteFetcher(options: { hsts?: string } = {}): Fetcher {
+function httpsSiteFetcher(options: { hsts?: string; clean?: boolean } = {}): Fetcher {
+  // const headers = options.clean
+  //   ? CLEAN_HEADERS
+  //   : options.hsts
+  //     ? { "strict-transport-security": options.hsts }
+  //     : {};
+
+  const headers: Record<string, string> = options.clean
+    ? CLEAN_HEADERS
+    : options.hsts
+      ? { "strict-transport-security": options.hsts }
+      : {};
   const { fetcher } = stubFetcher({
-    "/": okResult("https://vuln.example/", SITE_HTML, {
-      headers: options.hsts ? { "strict-transport-security": options.hsts } : {},
-    }),
+    "/": okResult("https://vuln.example/", SITE_HTML, { headers }),
     "/app.js": "console.log(1);",
     "/robots.txt": "User-agent: *\nAllow: /\n",
   });
-  return fetcher;
+  return async (url) => {
+    // The http->https redirect probe hits "http://vuln.example/"; pretend it
+    // redirects to HTTPS so the check stays quiet on these fixtures.
+    if (url.startsWith("http://")) {
+      return okResult(url, "", { finalUrl: "https://vuln.example/" });
+    }
+    return fetcher(url);
+  };
 }
 
 describe("runSiteScan", () => {
@@ -50,7 +74,7 @@ describe("runSiteScan", () => {
   it("produces no findings for a clean HTTPS site", async () => {
     const result = await runSiteScan({
       siteUrl: "https://vuln.example/",
-      fetcher: httpsSiteFetcher({ hsts: "max-age=31536000; includeSubDomains" }),
+      fetcher: httpsSiteFetcher({ clean: true }),
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -80,11 +104,21 @@ describe("runSiteScan", () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // Plain HTTP => the HSTS check correctly self-skips; findings may be empty.
-    expect(result.findings.every((f) => f.severity === "info")).toBe(true);
+    // Plain HTTP => HSTS self-skips, but the Phase 2B header/cookie checks and
+    // the plain-HTTP redirect check all fire on the vulnerable fixture.
+    const ids = new Set(result.findings.map((f) => f.checkId));
+    for (const id of [
+      "site.headers.csp",
+      "site.headers.frame",
+      "site.headers.misc",
+      "site.cookies",
+      "site.https.redirect",
+    ]) {
+      expect(ids.has(id)).toBe(true);
+    }
   });
 
-  it("clean fixture produces no non-info findings", async () => {
+  it("clean fixture yields only the unavoidable plain-HTTP finding", async () => {
     server = await startFixtureServer(cleanSite);
     const result = await runSiteScan({
       siteUrl: "http://fixture.example/",
@@ -92,6 +126,9 @@ describe("runSiteScan", () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.findings.filter((f) => f.severity !== "info")).toEqual([]);
+    // The fixture server is plain HTTP, so site.https.redirect correctly fires;
+    // every other check should stay quiet.
+    const nonInfo = result.findings.filter((f) => f.severity !== "info");
+    expect(nonInfo.map((f) => f.checkId)).toEqual(["site.https.redirect"]);
   });
 });

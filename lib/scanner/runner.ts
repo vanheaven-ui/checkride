@@ -53,7 +53,8 @@ export async function runChecks(
   const perCheck = await Promise.all(
     checks.map(async (check): Promise<CheckResult[]> => {
       try {
-        const findings = await withTimeout(check.run(ctx), perCheckTimeoutMs);
+        const timeoutMs = check.timeoutMs ?? perCheckTimeoutMs;
+        const findings = await withTimeout(check.run(ctx), timeoutMs);
         return findings.map((finding) => ({
           checkId: check.id,
           category: check.category,
