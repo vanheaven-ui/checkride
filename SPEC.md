@@ -474,6 +474,9 @@ Run 2A, 2B, 2C as separate agent sessions and separate PRs, in order.
 #### Phase 2C: bundle secrets, backend detection, performance
 - `lib/scanner/patterns/secrets.ts` (shared later by repo checks), `site.bundle.secrets`, `site.backend.supabase` (decode JWT payload; `service_role` is critical, `anon` is info), `site.backend.firebase`, `site.perf.basic`.
 - Integration tests: scanning `/fixtures/vulnerable-site` yields the expected set of findings; scanning `/fixtures/clean-site` yields few or none.
+- `lib/scanner/scrub.ts` plus a defensive scrub in `persist.ts`: before any finding is stored, run the secret patterns over `title`, `evidence`, and `location` and mask any full secret that slipped through, so a buggy check can never persist one.
+- ReDoS safety: every secret regex is linear (no nested quantifiers) and has a test running it over a 2 MB pathological string in under 1 second. Scanning yields to the event loop between scripts, and the secrets check scans at most 10 MB of script text per scan (note any skipped text).
+- Evidence for a secret is its pattern name, the redacted value, and the character offset. `location` is the script URL path only (no query string or fragment).
 - **Done when:** the integration tests pass and a real scan of a known site through the UI shows counts and top titles.
 
 ### Phase 3: Repo checks
