@@ -121,6 +121,38 @@ describe("persistFindings", () => {
     expect(insertedRows[0][0].title).toBe("Missing header");
     expect(insertedRows[0][0].evidenceRedacted).toBe("header not present");
   });
+
+  it("does not store a fragment of a secret that straddles the evidence cut", async () => {
+    const { db, insertedRows } = mockDb();
+    // Built at runtime so no secret-shaped literal exists in the repo.
+    const key = "sk" + "_live_" + "q".repeat(24);
+    // The key starts at index 485. A plain slice(0, 500) would keep "sk_live_" plus
+    // 7 characters, which is too short for any pattern to match afterwards.
+    const evidence = `${"a".repeat(484)} ${key} ${"b".repeat(100)}`;
+    await persistFindings(db, "scan-1", [finding({ evidence })]);
+    const stored = JSON.stringify(insertedRows);
+    expect(stored).not.toContain(key);
+    expect(stored).not.toContain("sk_live_");
+  });
+
+  it("does not store a fragment of a secret that straddles the title cut", async () => {
+    const { db, insertedRows } = mockDb();
+    const key = "sk" + "_live_" + "w".repeat(24);
+    // The key starts at index 185, so a plain slice(0, 200) keeps 15 characters of it.
+    const title = `${"t".repeat(184)} ${key}`;
+    await persistFindings(db, "scan-1", [finding({ title })]);
+    const stored = JSON.stringify(insertedRows);
+    expect(stored).not.toContain("sk_live_");
+  });
+
+  it("caps a long URL location at 300 characters", async () => {
+    const { db, insertedRows } = mockDb();
+    const location = `https://example.com/${"p".repeat(500)}?token=abc`;
+    await persistFindings(db, "scan-1", [finding({ location })]);
+    const stored = insertedRows[0][0].location as string;
+    expect(stored.length).toBeLessThanOrEqual(300);
+    expect(stored).not.toContain("token=abc");
+  });
 });
 
 describe("getFindingSummary", () => {
