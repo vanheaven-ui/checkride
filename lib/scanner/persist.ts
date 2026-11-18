@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { NeonHttpDatabase } from "drizzle-orm/neon-http";
 import * as schema from "@/lib/db/schema";
+import { scrubSecrets } from "@/lib/scanner/scrub";
 import { severityRank } from "@/lib/scanner/severity";
 import type { ScanFinding, Severity } from "@/lib/scanner/types";
 
@@ -19,19 +20,32 @@ export type FindingSummary = {
 };
 
 /**
+ * Scrub, truncate, then scrub again.
+ * - The first scrub runs on the FULL text, so a secret that straddles the length
+ *   cap is masked before it can be cut in half.
+ * - The second scrub catches any partial match the truncation itself created.
+ */
+function clean(value: string, maxLength: number): string {
+  return scrubSecrets(scrubSecrets(value).slice(0, maxLength));
+}
+
+/**
  * Location is stored as origin + pathname only (no query string or fragment,
  * which can carry tokens). Non-URL locations fall back to a plain truncation.
+ * The result is always capped at MAX_LOCATION_LENGTH and scrubbed.
  */
 function sanitizeLocation(location: string | undefined): string | null {
   if (!location) {
     return null;
   }
+  let value: string;
   try {
     const url = new URL(location);
-    return `${url.origin}${url.pathname}`;
+    value = `${url.origin}${url.pathname}`;
   } catch {
-    return location.slice(0, MAX_LOCATION_LENGTH);
+    value = location;
   }
+  return clean(value, MAX_LOCATION_LENGTH);
 }
 
 /**
@@ -50,8 +64,8 @@ export async function persistFindings(
     category: finding.category,
     severity: finding.severity,
     confidence: finding.confidence,
-    title: finding.title.slice(0, MAX_TITLE_LENGTH),
-    evidenceRedacted: finding.evidence.slice(0, MAX_EVIDENCE_LENGTH),
+    title: clean(finding.title, MAX_TITLE_LENGTH),
+    evidenceRedacted: clean(finding.evidence, MAX_EVIDENCE_LENGTH),
     location: sanitizeLocation(finding.location),
   }));
 

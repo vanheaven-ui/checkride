@@ -1,5 +1,11 @@
 import type { FixtureRoute } from "../../tests/helpers/fixture-server";
 
+// Benign public values, assembled at runtime so no key-shaped literal exists
+// in the repo. The Maps key is deliberately low-entropy so the generic
+// high-entropy secret pattern stays quiet, matching a real browser key.
+const GMAPS_BROWSER_KEY = "AIza" + "Qq7".repeat(12);
+const STRIPE_PUBLISHABLE_KEY = "pk" + "_test_" + "y".repeat(24);
+
 const HOME_HTML = `<!doctype html>
 <html lang="en">
   <head>
@@ -8,15 +14,24 @@ const HOME_HTML = `<!doctype html>
   </head>
   <body>
     <h1>Clean Fixture</h1>
-    <p>A fixture site that passes the Phase 2A checks.</p>
+    <p>A fixture site that passes the Phase 2 checks.</p>
+    <img src="/img/a.png" alt="a" />
+    <img src="/img/b.png" alt="b" width="100" />
+    <img src="/img/c.png" alt="c" height="80" />
   </body>
 </html>`;
 
-const MAIN_JS = `console.log("clean fixture bundle");`;
+const MAIN_JS = `// clean bundle: publishable keys and a maps browser key are public by design
+const stripePublishableKey = "${STRIPE_PUBLISHABLE_KEY}";
+const googleMapsConfig = { browserKey: "${GMAPS_BROWSER_KEY}", region: "us" };
+export function init() {
+  return [stripePublishableKey.length, googleMapsConfig.region];
+}`;
 
 /**
- * A fixture site that passes the Phase 2A checks: strong HSTS header and a
- * single same-origin script. No real-looking secrets anywhere.
+ * A fixture site that passes the checks: strong security headers, a clean
+ * cookie, a tiny script bundle, and only publishable/browser keys — which are
+ * public by design and must NOT be flagged as secrets.
  */
 export const cleanSite: Record<string, FixtureRoute> = {
   "/": {

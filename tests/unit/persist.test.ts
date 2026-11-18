@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { findings } from "@/lib/db/schema";
-import { type Db, getFindingSummary, persistFindings } from "@/lib/scanner/persist";
-import type { ScanFinding, Severity } from "@/lib/scanner/types";
+import { getFindingSummary, persistFindings } from "@/lib/scanner/persist";
+import { redactSecret } from "@/lib/scanner/redact";
+import type { ScanFinding } from "@/lib/scanner/types";
+import { mockDb } from "../helpers/mock-db";
 
 function finding(overrides: Partial<ScanFinding> = {}): ScanFinding {
   return {
@@ -13,50 +14,6 @@ function finding(overrides: Partial<ScanFinding> = {}): ScanFinding {
     evidence: "header not present",
     ...overrides,
   };
-}
-
-type MockDb = {
-  db: Db;
-  calls: string[];
-  /** Queries passed to each db.batch() call. */
-  batches: unknown[][];
-  insertedRows: Record<string, unknown>[][];
-};
-
-function mockDb(findingRows: { severity: Severity; title: string }[] = []): MockDb {
-  const calls: string[] = [];
-  const batches: unknown[][] = [];
-  const insertedRows: Record<string, unknown>[][] = [];
-  const db = {
-    delete: () => ({
-      where: () => {
-        calls.push("delete");
-        return { kind: "delete" };
-      },
-    }),
-    insert: () => ({
-      values: (rows: Record<string, unknown>[]) => {
-        calls.push("insert");
-        insertedRows.push(rows);
-        return { kind: "insert", rows };
-      },
-    }),
-    batch: async (queries: unknown[]) => {
-      calls.push("batch");
-      batches.push(queries);
-    },
-    select: () => ({
-      from: (table: unknown) => ({
-        where: async () => {
-          if (table === findings) {
-            return findingRows;
-          }
-          throw new Error("unexpected select");
-        },
-      }),
-    }),
-  };
-  return { db: db as unknown as Db, calls, batches, insertedRows };
 }
 
 describe("persistFindings", () => {
@@ -128,6 +85,73 @@ describe("persistFindings", () => {
     const location = insertedRows[0][0].location as string;
     expect(location.length).toBe(300);
     expect(location).not.toContain("?");
+  });
+
+  it("scrubs a full secret that slipped into evidence before storing", async () => {
+    const { db, insertedRows } = mockDb();
+    // Built at runtime so no secret-shaped literal exists in the repo.
+    const leakedKey = "sk" + "_live_" + "x".repeat(24);
+    await persistFindings(db, "scan-1", [
+      finding({ evidence: `leaked key ${leakedKey} in bundle` }),
+    ]);
+    const stored = insertedRows[0][0].evidenceRedacted as string;
+    expect(stored).not.toContain(leakedKey);
+    expect(stored).toContain(redactSecret(leakedKey));
+  });
+
+  it("scrubs secrets in title and location too", async () => {
+    const { db, insertedRows } = mockDb();
+    const leakedKey = "sk" + "_live_" + "z".repeat(24);
+    await persistFindings(db, "scan-1", [
+      finding({
+        title: `Found ${leakedKey}`,
+        location: `https://example.com/${leakedKey}`,
+      }),
+    ]);
+    const row = insertedRows[0][0];
+    expect(row.title as string).not.toContain(leakedKey);
+    expect(row.location as string).not.toContain(leakedKey);
+  });
+
+  it("leaves normal finding text unchanged", async () => {
+    const { db, insertedRows } = mockDb();
+    await persistFindings(db, "scan-1", [
+      finding({ title: "Missing header", evidence: "header not present" }),
+    ]);
+    expect(insertedRows[0][0].title).toBe("Missing header");
+    expect(insertedRows[0][0].evidenceRedacted).toBe("header not present");
+  });
+
+  it("does not store a fragment of a secret that straddles the evidence cut", async () => {
+    const { db, insertedRows } = mockDb();
+    // Built at runtime so no secret-shaped literal exists in the repo.
+    const key = "sk" + "_live_" + "q".repeat(24);
+    // The key starts at index 485. A plain slice(0, 500) would keep "sk_live_" plus
+    // 7 characters, which is too short for any pattern to match afterwards.
+    const evidence = `${"a".repeat(484)} ${key} ${"b".repeat(100)}`;
+    await persistFindings(db, "scan-1", [finding({ evidence })]);
+    const stored = JSON.stringify(insertedRows);
+    expect(stored).not.toContain(key);
+    expect(stored).not.toContain("sk_live_");
+  });
+
+  it("does not store a fragment of a secret that straddles the title cut", async () => {
+    const { db, insertedRows } = mockDb();
+    const key = "sk" + "_live_" + "w".repeat(24);
+    // The key starts at index 185, so a plain slice(0, 200) keeps 15 characters of it.
+    const title = `${"t".repeat(184)} ${key}`;
+    await persistFindings(db, "scan-1", [finding({ title })]);
+    const stored = JSON.stringify(insertedRows);
+    expect(stored).not.toContain("sk_live_");
+  });
+
+  it("caps a long URL location at 300 characters", async () => {
+    const { db, insertedRows } = mockDb();
+    const location = `https://example.com/${"p".repeat(500)}?token=abc`;
+    await persistFindings(db, "scan-1", [finding({ location })]);
+    const stored = insertedRows[0][0].location as string;
+    expect(stored.length).toBeLessThanOrEqual(300);
+    expect(stored).not.toContain("token=abc");
   });
 });
 
