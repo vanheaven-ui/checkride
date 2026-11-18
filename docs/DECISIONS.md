@@ -93,3 +93,21 @@
 | HttpOnly split into sensitive-name (medium/medium) vs other (low/medium) findings | Prompt's two confidence/severity tiers for the same attribute |
 | `site.https.redirect` fetch failures (blocked/timeout/refused/throw) produce no finding | Many hosts close port 80; a failed probe is not evidence of a problem |
 | Fixture sites are plain HTTP, so `site.https.redirect` fires on both fixtures; clean-fixture assertions exclude it explicitly | HTTPS redirect behavior is covered by unit tests with crafted SafeFetchResult objects |
+
+## 2026-11-14 — Phase 2C bundle secrets, backend detection, performance
+
+| Decision | Reason |
+|---|---|
+| Secret patterns live in `lib/scanner/patterns/secrets.ts` with per-pattern `accept` filters | Shared with Phase 3 repo checks; AWS example key, placeholders, and low-entropy generic values are filtered after the regex match |
+| Generic-assignment pattern uses a `(?<![A-Za-z0-9_.\-])` lookbehind and bounded quantifiers (name ≤128, value 24–256 chars) | Keeps the regex linear on pathological input; the ReDoS test scans ~2 MB in <1s |
+| JWTs are NOT secret patterns; `findJwts`/`decodeJwtPayload` are separate helpers | SPEC: ordinary JWTs are handled by the Supabase check, not flagged as generic secrets |
+| `site.bundle.secrets` budget is 10M UTF-16 code units (not bytes), HTML first then scripts in order, partial scan of the boundary script | "10 MB of text" has no exact byte definition for strings; code units are a cheap, predictable proxy and offsets stay valid |
+| Secret evidence is `<pattern name>: <redactSecret(value)> at character <index>`; location is origin+pathname of the script (or page for HTML) | SPEC 2C evidence rules; query strings/fragments can carry tokens |
+| High-confidence secret titles drop "Possible" (`X found in public code`); lower confidence uses `Possible X found in public code` | Prompt: "use 'possible' wording when confidence is not high" |
+| `site.backend.supabase` emits the critical service_role finding independently of the anon info finding; both can fire together | SPEC treats them as separate signals; service_role is critical wherever it appears |
+| Supabase/Firebase detection never makes network calls; JWT payloads are decoded without verification | SPEC 4.1/4.3: detection only, RLS/Rules cannot be verified externally |
+| Firebase fires on firebaseapp.com / firebaseio.com / firebasestorage hosts OR a projectId+AIza-apiKey pair in the same text; apiKey never appears in evidence | An AIza key alone is a Google Maps/browser key (public by design) — the clean fixture relies on this |
+| `site.perf.basic` counts an `<img>` as missing dimensions only when BOTH width and height are absent, needs ≥5 to fire | Prompt's literal "neither width nor height"; conservative to avoid noise |
+| Script-size finding is replaced by an info note when any script is truncated or snapshot notes record skips | Sizes would be lower bounds; SPEC requires noting skipped text instead of reporting a misleading number |
+| `persistFindings` scrubs title/evidence/location via `scrubSecrets` AFTER truncation and location sanitizing | SPEC 2C: defensive scrub so a buggy check can never persist a full secret |
+| Fixture secrets/JWTs/apiKeys are assembled at runtime via string concatenation and base64url helpers | No secret-shaped literal may exist in the repo; the served bundle still contains the assembled values |

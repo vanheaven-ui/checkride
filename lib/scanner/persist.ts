@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { NeonHttpDatabase } from "drizzle-orm/neon-http";
 import * as schema from "@/lib/db/schema";
+import { scrubSecrets } from "@/lib/scanner/scrub";
 import { severityRank } from "@/lib/scanner/severity";
 import type { ScanFinding, Severity } from "@/lib/scanner/types";
 
@@ -44,16 +45,19 @@ export async function persistFindings(
   scanId: string,
   scanFindings: readonly ScanFinding[],
 ): Promise<void> {
-  const rows = scanFindings.map((finding) => ({
-    scanId,
-    checkId: finding.checkId,
-    category: finding.category,
-    severity: finding.severity,
-    confidence: finding.confidence,
-    title: finding.title.slice(0, MAX_TITLE_LENGTH),
-    evidenceRedacted: finding.evidence.slice(0, MAX_EVIDENCE_LENGTH),
-    location: sanitizeLocation(finding.location),
-  }));
+  const rows = scanFindings.map((finding) => {
+    const location = sanitizeLocation(finding.location);
+    return {
+      scanId,
+      checkId: finding.checkId,
+      category: finding.category,
+      severity: finding.severity,
+      confidence: finding.confidence,
+      title: scrubSecrets(finding.title.slice(0, MAX_TITLE_LENGTH)),
+      evidenceRedacted: scrubSecrets(finding.evidence.slice(0, MAX_EVIDENCE_LENGTH)),
+      location: location === null ? null : scrubSecrets(location),
+    };
+  });
 
   const deleteQuery = db.delete(findings).where(eq(findings.scanId, scanId));
   if (rows.length > 0) {

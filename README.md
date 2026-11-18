@@ -42,10 +42,27 @@ When a scan is requested, the Inngest function `scan.run` executes these steps:
      returns only `{ findingCount }`.
 4. `finalize` — marks the scan completed.
 
-Phase 2A ships exactly one check: `site.headers.hsts` (missing or weak
-`Strict-Transport-Security`). Findings are stored with secrets redacted and are
-surfaced on `/scan/<id>` as severity counts plus the top finding titles once the
-scan completes; the full report arrives in a later phase.
+## Implemented site checks (Phase 2)
+
+| Check | What it does |
+|---|---|
+| `site.headers.hsts` | Missing or weak `Strict-Transport-Security` |
+| `site.headers.csp` | Missing, report-only, or unsafe-script CSP |
+| `site.headers.frame` | Missing `X-Frame-Options` / `frame-ancestors` |
+| `site.headers.misc` | Missing `X-Content-Type-Options` / `Referrer-Policy` |
+| `site.https.redirect` | HTTP does not redirect to HTTPS |
+| `site.cookies` | Cookies missing `Secure` / `HttpOnly` / `SameSite` |
+| `site.bundle.secrets` | Regex scan of HTML + same-origin JS for leaked credentials (redacted evidence only) |
+| `site.backend.supabase` | Supabase project URL / JWT detection; `service_role` is critical, `anon` + project URL is informational (RLS review) |
+| `site.backend.firebase` | Firebase config detection for manual Security Rules review |
+| `site.perf.basic` | Response time, HTML size, total script size, images without dimensions |
+
+Phase 2A shipped the check framework, site snapshot, and persistence; Phase 2B
+added the header/transport/cookie checks; Phase 2C added bundle secrets,
+backend detection, and basic performance checks. Findings are stored with
+secrets scrubbed (a defensive pass masks any full secret before insert) and
+are surfaced on `/scan/<id>` as severity counts plus the top finding titles
+once the scan completes; the full report arrives in a later phase.
 
 Repo scans skip `scan-site` entirely until Phase 3.
 
