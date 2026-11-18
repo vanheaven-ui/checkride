@@ -141,6 +141,10 @@ interface RawFinding {
 - **Fetch once, check many.** The pipeline builds one `SiteSnapshot` (home page response, headers, HTML, fetch time, same-origin script bodies) and checks are pure functions over it, except checks that explicitly need an extra request (for example `site.https.redirect`).
 - **Budgets:** whole snapshot phase at most 25 seconds; at most 15 same-origin script files; bundle fetch concurrency 4; each script capped by safeFetch's 5 MB limit (record `truncated`). When a budget is exhausted, skip the rest and record an `info` finding saying so; never fail the scan.
 - **robots.txt:** fetch `/robots.txt` once. If it disallows `LaunchCheckBot` (or `*`) for a path, do not fetch that path (the home page the user submitted is always fetched; scripts and extra paths are skipped with an `info` finding).
+- **Repo checks use an injected GitHub client and the injected fetcher.** Repo metadata and the file tree come from a minimal `GithubClient` interface (production: Octokit against `api.github.com`, authenticated with `GITHUB_TOKEN` when set; tests: an in-memory fake). File contents come from `raw.githubusercontent.com` through the injected `Fetcher` (production: `safeFetch` with `maxBytes` lowered to 200 KB). The token is only ever given to Octokit, never logged, stored, or forwarded elsewhere.
+- **Repo budgets:** at most 300 files fetched, 200 KB per file, 15 MB total, concurrency 6, 25 seconds overall. Skip `node_modules`, `dist`, `build`, `.next`, `vendor`, lockfiles, `*.min.js`, `*.map`, and binary extensions for content scanning. When a budget is exhausted, add an `info` finding; never fail the scan.
+- **Test and example paths are down-ranked.** A secret-pattern match inside a path containing `test`, `spec`, `fixture`, `mock`, `sample`, or `docs` is reported as `low` severity and `low` confidence, so a repo's own fake keys do not look like leaks. Do NOT down-rank `.env.example` files: placeholder values are already filtered by the pattern filters, and a real-looking key in an example file is a genuine leak.
+- **Persistence is scoped.** `persistFindings(db, scanId, findings, { scope: "site" | "repo" })` deletes only that scope's rows (`check_id` starting `site.` or `repo.`) before inserting, so the `scan-site` and `scan-repo` steps never delete each other's findings.
 - **Inngest step outputs must stay small.** Never return the snapshot, HTML, or bundle bodies from a `step.run` (step results are serialized and persisted). Fetch, check, and persist findings inside ONE step and return only small counts.
 
 ---
@@ -273,6 +277,8 @@ Function `scan.run`, triggered by event `scan/requested`. Steps (each `step.run`
 On unrecoverable error set `status = failed` with a safe error message.
 
 **Implemented pipeline as of Phase 2:** `validate-and-resolve`, `mark-running`, `scan-site` (only when a site URL exists: build snapshot, run site checks, replace this scan's findings rows, return only counts), `finalize`. Persisting findings is idempotent: delete the scan's existing findings, then insert, so retries never duplicate rows.
+
+**Implemented pipeline as of Phase 3:** `validate-and-resolve`, `mark-running`, `scan-site` (when a site URL exists), `scan-repo` (when a repo URL exists: fetch repo snapshot, run repo checks, replace the `repo.` findings, return only counts), `finalize`. In `both` mode, if the repo cannot be read the scan still completes with an `info` finding `repo.snapshot.notes`; in `repo` mode an unreadable repo fails the scan with `NonRetriableError("repo_unreachable")`.
 
 ---
 
@@ -479,10 +485,23 @@ Run 2A, 2B, 2C as separate agent sessions and separate PRs, in order.
 - Evidence for a secret is its pattern name, the redacted value, and the character offset. `location` is the script URL path only (no query string or fragment).
 - **Done when:** the integration tests pass and a real scan of a known site through the UI shows counts and top titles.
 
-### Phase 3: Repo checks
-- Octokit tree fetch with caps (max 300 files, 200 KB per file, skip binaries/`node_modules`/lockfile content for secret scan).
-- Implement checks in 4.2 with fixtures (small sample repos as directories).
-- **Done when:** a sample repo containing a committed `.env`, a fake Stripe key, and an unverified webhook handler yields critical/high findings; a clean sample repo yields none of those.
+### Phase 3: Repo checks (split into two sessions)
+
+Run 3A and 3B as separate agent sessions and separate PRs, in order.
+
+#### Phase 3A: GitHub snapshot, repo framework, pipeline step, three checks
+- `lib/scanner/github.ts`: `GithubClient` interface (`getRepo`, `getTree`), an Octokit-backed implementation (pinned dependency `@octokit/rest`), and typed safe errors (`repo_not_found`, `repo_rate_limited`, `repo_unreachable`). Public repositories only.
+- `lib/scanner/repo-snapshot.ts`: `buildRepoSnapshot(repoUrl, { github, fetcher })` returns `{ ok: true, snapshot } | { ok: false, reason }`. The snapshot has `owner`, `repo`, `defaultBranch`, `sha`, `treeTruncated`, `tree` (path and size), `files` (path, text, truncated) and `notes`, built under the repo budgets in 4.3 with file priority: env and config files, then `app/`, `src/`, `pages/`, `lib/`, `api/`, `supabase/`, then the rest, shallow before deep.
+- Repo check types (`RepoCheck`, `RepoScanContext`), a generic runner (existing site code and tests keep working), `lib/scanner/repo-registry.ts`, and `lib/scanner/scan-repo.ts` (`runRepoScan`).
+- Scoped `persistFindings` and a `scan-repo` pipeline step (see section 10); `lib/scanner/steps.ts` gains `STEP.scanRepo` with `appliesTo: "repo"`.
+- Checks: `repo.env.committed`, `repo.secrets.patterns` (reusing `patterns/secrets.ts`), `repo.quality.basics`.
+- Fixtures: sample repos as in-memory file maps with a fake `GithubClient`; fake secrets are built at runtime.
+- **Done when:** a repo-only scan produces persisted `repo.` findings through the real pipeline; a `both` scan keeps its `site.` findings; the sample repo with a committed `.env` and a fake Stripe key yields critical findings and the clean sample repo yields none of those.
+
+#### Phase 3B: dependency audit and code-pattern checks
+- `repo.deps.audit` (OSV.dev batch query through the injected fetcher; lockfile fetched separately with a 2 MB cap), `repo.stripe.webhook`, `repo.api.noauth`, `repo.supabase.rls`.
+- Fixtures for each, including negative cases.
+- **Done when:** the sample repo with an unverified Stripe webhook, an unauthenticated route handler, and a table without row level security yields the matching findings, and the clean sample yields none of them.
 
 ### Phase 4: Scoring and AI explanations
 - `scoring.ts` with tests. AI explain layer with Zod validation, retry, and fallback templates. Token tracking.

@@ -39,6 +39,8 @@ Before opening any PR, all of these must pass: `pnpm lint && pnpm typecheck && p
 - When a prompt and `SPEC.md` disagree, stop and report the conflict instead of guessing.
 - **Inngest `step.run` results are serialized and persisted.** Never return large data (HTML, bundles, snapshots, file contents) from a step. Do the work and persist results inside one step and return only small summaries.
 - Scanner checks must never import `safeFetch` directly; they use the injected `ctx.fetch`. Do not modify `safe-fetch.ts` or `url-validation.ts` unless a prompt explicitly says so.
+- `persistFindings` is scoped (`site.` or `repo.` check ids) so one pipeline step never deletes another step's findings. Always pass the scope.
+- `GITHUB_TOKEN` is only ever handed to Octokit for `api.github.com`. Never log it, store it, or send it anywhere else. Raw file contents are fetched through the injected fetcher, which sends no auth headers.
 - Do not put real secrets in fixtures. Use obviously fake values built at test time (for example `"sk_live_" + "x".repeat(24)`), so secret scanners and push protection do not flag the repo.
 
 ## Code standards
